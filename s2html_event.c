@@ -205,9 +205,21 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 	int pre_ch;
 	switch(ch)
 	{
-		case '\'' : // begining of ASCII char 
-			break;
+		/* Beginning of ASCII character*/
+		case '\'' :
+			if(event_data_idx)
+			{
+				fseek(fd,-1L,SEEK_CUR);
+				set_parser_event(PSTATE_IDLE,PEVENT_REGULAR_EXP);
+				return &pevent_data;
+			}
+			else
+			{
+				fseek(fd,-1L,SEEK_CUR);
+				state = PSTATE_ASCII_CHAR;
+			}
 
+			break;
 		case '/' :
 			pre_ch = ch;
 			if((ch = fgetc(fd)) == '*') // multi line comment
@@ -275,7 +287,7 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 			}
 			break;
 
-			
+
 		/* Detect Numeric Constant */
 		case '0' ... '9' :
 		if(event_data_idx)
@@ -516,5 +528,32 @@ pevent_t * pstate_ascii_char_handler(FILE *fd, int ch)
 	 * return event data at the end of event
 	 * else return NULL
 	 */
+
+	/* Storing \' , \" */
+	if(ch == '\\')
+	{	
+		pevent_data.data[event_data_idx++] = ch;
+
+		int next_ch = fgetc(fd);
+
+		if(next_ch == EOF)
+			return NULL;
+
+		pevent_data.data[event_data_idx++] = next_ch;
+		return NULL;
+	}
+
+
+	pevent_data.data[event_data_idx++] = ch;
+
+	/* Storing ending '(single quoto) */
+	if(ch == '\'' && event_data_idx > 1)
+	{
+		set_parser_event(PSTATE_IDLE,PEVENT_ASCII_CHAR);
+		return &pevent_data;
+	}
+
+
+	return NULL;
 }
 /**** End of file ****/
