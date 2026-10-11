@@ -259,7 +259,7 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 
 			break;
 
-			
+
 		/* Detect String */
 		case '\"' :	
 			if(event_data_idx)
@@ -275,6 +275,7 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 			}
 			break;
 
+			
 		/* Detect Numeric Constant */
 		case '0' ... '9' :
 		if(event_data_idx)
