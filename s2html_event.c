@@ -268,7 +268,17 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 
 		/* Detect Preprocessor Directive */
 		case '#' :
-
+			if(event_data_idx)
+			{
+				fseek(fd,-1L,SEEK_CUR);
+				set_parser_event(PSTATE_IDLE,PEVENT_REGULAR_EXP);
+				return &pevent_data;
+			}
+			else
+			{
+				fseek(fd,-1L,SEEK_CUR);
+				state = PSTATE_PREPROCESSOR_DIRECTIVE;
+			}
 			break;
 
 
@@ -302,6 +312,7 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 				state = PSTATE_NUMERIC_CONSTANT;
 			}
 			break;
+
 
 		/* Detect Reserved Keyword */
 		case 'a' ... 'z' :
@@ -345,34 +356,91 @@ pevent_t * pstate_preprocessor_directive_handler(FILE *fd, int ch)
 
 	return NULL;
 }
-pevent_t * pstate_sub_preprocessor_main_handler(FILE *fd, int ch)
+
+pevent_t *pstate_sub_preprocessor_main_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to detect several events here
-	 * This state is similar to Idle state with slight difference
-	 * in state transition.
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+    /* Store # and directive characters */
+    if(ch == '#')
+	{
+		pevent_data.data[event_data_idx++] = ch;
+        return NULL;
+	}
+
+	
+	if(isalpha(ch))
+    {
+        pevent_data.data[event_data_idx++] = ch;
+        return NULL;
+    }	
+
+
+    /* Reprocess the delimiter in the next parser call */
+    fseek(fd, -1, SEEK_CUR);
+	pevent_data.data[event_data_idx] = '\0';
+
+    if(strcmp(pevent_data.data, "#include") == 0)
+    {
+        set_parser_event(PSTATE_HEADER_FILE,
+                         PEVENT_PREPROCESSOR_DIRECTIVE);
+
+        state_sub = PSTATE_SUB_PREPROCESSOR_MAIN;
+    }
+    else
+    {
+        set_parser_event(PSTATE_IDLE,
+                         PEVENT_PREPROCESSOR_DIRECTIVE);
+
+        state_sub = PSTATE_SUB_PREPROCESSOR_MAIN;
+    }
+
+    return &pevent_data;
 }
 
-pevent_t * pstate_header_file_handler(FILE *fd, int ch)
-{
-	/* write a switch case here to store header file name
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+pevent_t *pstate_header_file_handler(FILE *fd, int ch)
+{	
+	if(ch == ' ' || ch == '\t')
+	{
+		pevent_data.data[event_data_idx++] = ch;
+		set_parser_event(PSTATE_HEADER_FILE,PEVENT_REGULAR_EXP);
+		return &pevent_data;
+	}
+
+	
+	if(ch == '<')
+	{
+		pevent_data.property = STD_HEADER_FILE;
+		return NULL;
+	}
+	else if(ch == '"' && event_data_idx == 0)
+	{
+		pevent_data.property = USER_HEADER_FILE;
+		pevent_data.data[event_data_idx++] = ch;
+		return NULL;
+	}
+
+	
+
+    /* Complete the event only at the closing delimiter */
+    if((ch == '>' || ch == '"') && (event_data_idx > 1))
+    {
+		if(ch == '"')
+			pevent_data.data[event_data_idx++] = ch;
+		
+        set_parser_event(PSTATE_IDLE, PEVENT_HEADER_FILE);
+        return &pevent_data;
+    }
+
+	/* Store the current character */
+    pevent_data.data[event_data_idx++] = ch;
+    
+	
+    return NULL;
 }
 
 pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store words
-	 * return event data at the end of event
-	 * else return NULL
-	 */
-
-
 	/* Storing the keyword in buffer */
-	if(isalpha(ch) || isdigit(ch) || (ch == '_'))
+	if(isalpha(ch) || isdigit(ch))// || (ch == '_'))
 	{
 		pevent_data.data[event_data_idx++] = ch;
 		return NULL;
@@ -385,6 +453,10 @@ pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
 
 	/* Check whether the collected word is a keyword */
 	int keyword_prop = is_reserved_keyword(pevent_data.data);
+
+	printf("Keyword: [%s], Property: %d\n",
+	pevent_data.data, keyword_prop);
+
 
 	if(keyword_prop != 0)
 	{
@@ -400,16 +472,21 @@ pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
 
 pevent_t * pstate_numeric_constant_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store digits
-	 * return event data at the end of event
-	 * else return NULL
-	 */
-
 	/* Storing the Numeric values in buffer */
 	if(isdigit(ch) || 
 	  ((ch == '.') && (strchr(pevent_data.data,'.') == NULL)))	/* Ensuring only 1 decimal is there */
 	{
 		pevent_data.data[event_data_idx++] = ch;
+
+		int next_ch = fgetc(fd);
+
+		if(next_ch == EOF)
+		{
+			set_parser_event(PSTATE_IDLE,PEVENT_NUMERIC_CONSTANT);
+			return &pevent_data;
+		}
+
+		fseek(fd,-1,SEEK_CUR);
 		return NULL;
 	}
 
@@ -426,32 +503,67 @@ pevent_t * pstate_numeric_constant_handler(FILE *fd, int ch)
 
 pevent_t * pstate_string_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store string
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+	static int start = 0;
 
-	
-	
+
 	/* Storing \" , \\ , like characters */ 
-	if(ch == '\\')
+	if(ch == '\\' || ch == '%')
 	{
-		int next_ch = fgetc(fd);
+		start = 1;
 
-		if(next_ch == EOF)
-			return NULL;
+		/* Printing the string content before format specifier */
+		if(event_data_idx != 0)
+		{
+			fseek(fd,-1,SEEK_CUR);
+			set_parser_event(PSTATE_STRING,PEVENT_STRING);
+			return &pevent_data;
+		}
 
 		/* Storing character after \ */
-		pevent_data.data[event_data_idx++] = next_ch;
-		return NULL;	
+		pevent_data.data[event_data_idx++] = ch;
+
+
+		if(ch == '%')
+		{
+			int next_ch = fgetc(fd);
+
+			while(next_ch != EOF)
+			{
+				pevent_data.data[event_data_idx++] = next_ch;
+
+				if(strchr("diuoxXfFeEgGaAcspn%",next_ch) != NULL)
+					break;
+				
+				next_ch = fgetc(fd);
+			}
+		}
+
+		else
+		{
+			int next_ch = fgetc(fd);
+
+			if(next_ch != EOF)
+				pevent_data.data[event_data_idx++] = next_ch;
+		}
+
+
+		pevent_data.data[event_data_idx] = '\0';
+
+		pevent_data.property = RES_KEYWORD_NON_DATA;
+
+		set_parser_event(PSTATE_STRING,PEVENT_RESERVE_KEYWORD);
+		return &pevent_data;
 	}
 	
 	/* Storing data */
 	pevent_data.data[event_data_idx++] = ch;
+	
+// printf("%d")
 
 	/* Check closing "(double quote) */
-	if(ch == '"' && event_data_idx > 1)
+	if(ch == '"' && (event_data_idx > 1 || start == 1))
 	{
+		start = 0;
 		set_parser_event(PSTATE_IDLE,PEVENT_STRING);
 		return &pevent_data;
 	}
@@ -524,22 +636,17 @@ pevent_t * pstate_multi_line_comment_handler(FILE *fd, int ch)
 }
 pevent_t * pstate_ascii_char_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store ASCII chars
-	 * return event data at the end of event
-	 * else return NULL
-	 */
-
 	/* Storing \' , \" */
 	if(ch == '\\')
 	{	
-		pevent_data.data[event_data_idx++] = ch;
+		pevent_data.data[event_data_idx++] = ch;	// Storing \ (backslash)
 
 		int next_ch = fgetc(fd);
 
 		if(next_ch == EOF)
 			return NULL;
 
-		pevent_data.data[event_data_idx++] = next_ch;
+		pevent_data.data[event_data_idx++] = next_ch;	// Storing character after \ (backslash) [' , "]
 		return NULL;
 	}
 

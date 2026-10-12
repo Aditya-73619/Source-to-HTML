@@ -15,6 +15,7 @@ void html_begin(FILE* dest_fp, int type) /* type => not used, but can be used to
 	fprintf(dest_fp, "<link rel=\"stylesheet\" href=\"styles.css\">\n");
 	fprintf(dest_fp, "</head>\n");
 	fprintf(dest_fp, "<body style=\"background-color:lightgrey;\">\n");
+	// fprintf(dest_fp, "<body style=\"background-color:black; color:white;\">\n");
 	fprintf(dest_fp, "<pre>\n");
 }
 void html_end(FILE* dest_fp, int type) /* type => not used, but can be used to add differnet HTML tags */
